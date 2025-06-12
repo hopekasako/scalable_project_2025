@@ -1,0 +1,24 @@
+
+    LSTM Model Evaluation Report
+    ===========================
+
+    1. Performance Metrics
+    ---------------------
+    Root Mean Square Error (RMSE): $27.70
+    Mean Absolute Error (MAE): $17.69
+    Mean Absolute Percentage Error (MAPE): 3.81%
+    R-squared Score: 0.9330
+    Directional Accuracy: 49.79%
+
+    2. Model Characteristics
+    -----------------------
+    - Number of predictions: 949
+    - Price range: $233.88 - $691.69
+    - Prediction range: $251.89 - $573.71
+
+    3. Error Analysis
+    ----------------
+    - Standard deviation of errors: $27.61
+    - Mean error: $2.28
+    - Median error: $0.62
+    
