@@ -1,142 +1,100 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.window import Window
-from pyspark.sql.functions import (
-    col,
-    lag,
-    round as spark_round,
-    mean,
-    when,
-    row_number,
-    stddev,
-    abs,
-    greatest,
-    sum as spark_sum,
-    dayofweek,
-    month,
-    quarter,
-    try_divide,
-)
-
-spark = SparkSession.builder.appName("Netflix Data Featuring").getOrCreate()
-
-df = spark.read.csv(path="data/nflx_cleaned.csv", header=True, inferSchema=True)
-df.printSchema()
-
-# Shorting data by Date
-df = df.orderBy(col("Date"))
-
-# Define window specifications
-window_spec = Window.orderBy(col("Date"))
-window_spec_5 = Window.orderBy(col("Date")).rowsBetween(-4, 0)  # 5-day window
-window_spec_9 = Window.orderBy(col("Date")).rowsBetween(-8, 0)  # 9-day window
-window_spec_10 = Window.orderBy(col("Date")).rowsBetween(-9, 0)  # 10-day window
-window_spec_12 = Window.orderBy(col("Date")).rowsBetween(-11, 0)  # 12-day window
-window_spec_14 = Window.orderBy(col("Date")).rowsBetween(-13, 0)  # 14-day window
-window_spec_20 = Window.orderBy(col("Date")).rowsBetween(-19, 0)  # 20-day window
-window_spec_26 = Window.orderBy(col("Date")).rowsBetween(-25, 0)  # 25-day window
+import pandas as pd
+import numpy as np
 
 
-# 1. Price-based features
-df = df.withColumn("Daily_Range", col("High") - col("Low"))
-df = df.withColumn("Price_Change", col("Close") - col("Open"))
-df = df.withColumn(
-    "Pct_change", spark_round((col("Close") - col("Open")) / col("Open"), 6)
-)
+def engineer_features(df):
+    """
+    Engineer technical features from stock price data.
 
-# 2. Previous Close and Returns
-df = df.withColumn("Prev_Close", lag(col("Close")).over(window_spec))
-df = df.withColumn(
-    "Returns", spark_round((col("Close") - col("Prev_Close")) / col("Prev_Close"), 6)
-)
+    Parameters:
+    df (pd.DataFrame): DataFrame with columns: Date, Open, High, Low, Close, Volume
 
-# 3. Moving Averages
-df = df.withColumn("SMA_5", spark_round(mean(col("Close")).over(window_spec_5), 2))
-df = df.withColumn("SMA_10", spark_round(mean(col("Close")).over(window_spec_10), 2))
-df = df.withColumn("SMA_20", spark_round(mean(col("Close")).over(window_spec_20), 2))
+    Returns:
+    pd.DataFrame: DataFrame with additional technical indicators
+    """
+    # Create copy of dataframe
+    df = df.copy()
+
+    # Basic Price Features
+    df['Returns'] = df['Close'].pct_change()
+    df['Log_Returns'] = np.log(df['Close']).diff()
+    df['Price_Range'] = df['High'] - df['Low']
+    df['Price_Range_Pct'] = df['Price_Range'] / df['Close']
+
+    # Moving Averages
+    df['SMA_5'] = df['Close'].rolling(window=5).mean()
+    df['SMA_20'] = df['Close'].rolling(window=20).mean()
+    df['EMA_5'] = df['Close'].ewm(span=5, adjust=False).mean()
+    df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
+
+    # Relative Strength Index (RSI)
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # Bollinger Bands
+    df['BB_Middle'] = df['Close'].rolling(window=20).mean()
+    bb_std = df['Close'].rolling(window=20).std()
+    df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
+    df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
+
+    # Stochastic Oscillator
+    low_min = df['Low'].rolling(window=14).min()
+    high_max = df['High'].rolling(window=14).max()
+    df['K_Line'] = ((df['Close'] - low_min) / (high_max - low_min)) * 100
+    df['D_Line'] = df['K_Line'].rolling(window=3).mean()
+
+    # Volume Features
+    df['Volume_SMA_5'] = df['Volume'].rolling(window=5).mean()
+    df['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean()
+    df['Volume_Ratio'] = df['Volume'] / df['Volume_SMA_5']
+
+    # Momentum Indicators
+    df['MACD'] = df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean() - df['Close'].ewm(span=26,
+                                                                                                adjust=False).mean()
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+    # Volatility Features
+    df['Daily_Volatility'] = df['Returns'].rolling(window=20).std()
+    df['ATR'] = calculate_atr(df)
+
+    df = df.fillna(0)
+
+    return df
 
 
-# EMA calculation
-def calculate_ema(df, column, window_size, window_spec):
-    alpha = 2 / (window_size + 1)
-    df = df.withColumn(f"EMA_{window_size}_temp", col(column))
-    for i in range(1, window_size):
-        df = df.withColumn(
-            f"EMA_{window_size}_temp",
-            when(
-                row_number().over(window_spec) > i,
-                (alpha * col(column))
-                + (
-                    (1 - alpha)
-                    * lag(col(f"EMA_{window_size}_temp"), 1).over(window_spec)
-                ),
-            ).otherwise(col(f"EMA_{window_size}_temp")),
-        )
-    return df.withColumn(
-        f"EMA_{window_size}", spark_round(col(f"EMA_{window_size}_temp"), 2)
-    ).drop(f"EMA_{window_size}_temp")
+def calculate_atr(df, period=14):
+    """Calculate Average True Range (ATR)"""
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
 
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
 
-df = calculate_ema(df, "Close", 12, window_spec)
-df = calculate_ema(df, "Close", 26, window_spec)
+    return true_range.rolling(window=period).mean()
 
-# 4. MACD
-df = df.withColumn("MACD", col("EMA_12") - col("EMA_26"))
-df = df.withColumn("Signal_Line", spark_round(mean(col("MACD")).over(window_spec_9), 2))
-df = df.withColumn("MACD_Histogram", col("MACD") - col("Signal_Line"))
+def main():
 
-# 5. RSI
-df = df.withColumn("Price_Diff", col("Close") - lag(col("Close"), 1).over(window_spec))
-df = df.withColumn("Gain", when(col("Price_Diff") > 0, col("Price_Diff")).otherwise(0))
-df = df.withColumn("Loss", when(col("Price_Diff") < 0, -col("Price_Diff")).otherwise(0))
-df = df.withColumn("Avg_Gain", spark_round(mean(col("Gain")).over(window_spec_14), 2))
-df = df.withColumn("Avg_Loss", spark_round(mean(col("Loss")).over(window_spec_14), 2))
-df = df.withColumn("RS", try_divide(col("Avg_Gain"), col("Avg_Loss")))
-df = df.withColumn("RSI", spark_round(100 - (100 / (1 + col("RS"))), 2))
+    print("Starting feature engineering...")
+    df = pd.read_csv("scripts/dataset/preprocessed_spark_data.csv/part-00000-a001a76c-f85d-44dd-b809-c8bd73287a8a-c000.csv")
+    print("Data loaded, shape:", df.shape)
 
-# 6. Bollinger Bands
-df = df.withColumn("Std_20", spark_round(stddev(col("Close")).over(window_spec_20), 2))
-df = df.withColumn("Upper_BB", col("SMA_20") + 2 * col("Std_20"))
-df = df.withColumn("Lower_BB", col("SMA_20") - 2 * col("Std_20"))
+    # Engineer features
+    df_features = engineer_features(df)
+    print("Features engineered, new shape:", df_features.shape)
 
-# 7. Average True Range (ATR)
-df = df.withColumn("TR1", col("High") - col("Low"))
-df = df.withColumn("TR2", abs(col("High") - lag(col("Close"), 1).over(window_spec)))
-df = df.withColumn("TR3", abs(col("Low") - lag(col("Close"), 1).over(window_spec)))
-df = df.withColumn("TR", greatest(col("TR1"), col("TR2"), col("TR3")))
-df = df.withColumn("ATR", spark_round(mean(col("TR")).over(window_spec_14), 2))
+    # Print final info about missing values
+    print("\nMissing values after feature engineering:")
+    print(df_features.isnull().sum())
 
-# 8. Volume-based features
-df = df.withColumn("Prev_Volume", lag(col("Volume")).over(window_spec))
-df = df.withColumn(
-    "Volume_Pct_Change",
-    spark_round((col("Volume") - col("Prev_Volume")) / col("Prev_Volume"), 6),
-)
+    # Save the new dataset
+    df_features.to_csv("scripts/dataset/NFLX_feature.csv")
+    print("Data saved to FE_NFLX.csv")
 
-# On-Balance Volume (OBV)
-df = df.withColumn(
-    "OBV",
-    spark_sum(
-        when(col("Close") > lag(col("Close"), 1).over(window_spec), col("Volume"))
-        .when(col("Close") < lag(col("Close"), 1).over(window_spec), -col("Volume"))
-        .otherwise(0)
-    ).over(window_spec),
-)
+    return df_features
 
-# 9. Lagged Closing Prices
-df = df.withColumn("Lag_Close_1", lag(col("Close"), 1).over(window_spec))
-df = df.withColumn("Lag_Close_2", lag(col("Close"), 2).over(window_spec))
-df = df.withColumn("Lag_Close_3", lag(col("Close"), 3).over(window_spec))
-
-# 10. Date-based features
-df = df.withColumn("Day_of_Week", dayofweek(col("Date")))
-df = df.withColumn("Month", month(col("Date")))
-df = df.withColumn("Quarter", quarter(col("Date")))
-
-# Drop intermediate columns
-df = df.drop("Price_Diff", "Gain", "Loss", "RS", "TR1", "TR2", "TR3", "TR", "Std_20")
-df = df.withColumnRenamed("Adj Close", "Adj_Close")
-
-# Save the output
-df.write.csv("data/nflx_features.csv", header=True, mode="overwrite")
-
-spark.stop()
+if __name__ == "__main__":
+    main()
