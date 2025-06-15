@@ -17,7 +17,6 @@ A real-time Netflix-themed stock analysis dashboard built with Streamlit and Spa
 1. **Clone the repo**  
    ```bash
    git clone https://github.com/hopekasako/scalable_project_2025.git
-   cd scalable_project_2025
 
 2.	**Install dependencies**
    
