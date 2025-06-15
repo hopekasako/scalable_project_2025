@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 spark = SparkSession.builder.appName("LinearRegressionWithSpark").getOrCreate()
 
 # Load dữ liệu
-df = spark.read.csv("scripts/dataset/NFLX_feature.csv", header=True, inferSchema=True)
+df = spark.read.csv("../../scripts/dataset/NFLX_feature.csv", header=True, inferSchema=True)
 
 # Chuyển đổi cột "Date" thành kiểu ngày
 df = df.withColumn("Date", col("Date").cast("date"))

@@ -381,7 +381,7 @@ def main():
     lstm_model = StockPriceLSTM(spark)
 
     # Read the feature-engineered data
-    df = spark.read.csv("scripts/dataset/NFLX_feature.csv", header=True, inferSchema=True)
+    df = spark.read.csv("../../scripts/dataset/NFLX_feature.csv", header=True, inferSchema=True)
 
     # Train the model
     history = lstm_model.train(df)
